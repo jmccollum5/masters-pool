@@ -1,35 +1,25 @@
 export default async function handler(req, res) {
   try {
-    // Try multiple ESPN endpoints
-    const endpoints = [
-      "https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard",
-      "https://site.api.espn.com/apis/site/v2/sports/golf/leaderboard",
-      "https://site.web.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?region=us&lang=en",
-    ];
-
-    let data = null;
-    let lastStatus = null;
-
-    for (const url of endpoints) {
-      const r = await fetch(url, { headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0" } });
-      lastStatus = r.status;
-      if (r.ok) {
-        data = await r.json();
-        break;
+    // Use the specific Masters 2026 event ID from ESPN
+    const url = "https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?event=401811941";
+    
+    const r = await fetch(url, {
+      headers: {
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)"
       }
-    }
+    });
 
-    if (!data) throw new Error(`ESPN returned ${lastStatus} on all endpoints`);
+    if (!r.ok) throw new Error(`ESPN returned ${r.status}`);
+    const data = await r.json();
 
     const players = [];
     let cutLine = null;
 
-    const event = data.events?.find(e =>
-      e.name?.toLowerCase().includes("master")
-    ) || data.events?.[0];
+    const event = data.events?.[0];
 
     if (!event) {
-      return res.status(200).json({ players: [], cutLine: null, error: "No Masters event found yet — tournament may not have started" });
+      return res.status(200).json({ players: [], cutLine: null, error: "No event data found" });
     }
 
     const competitors = event.competitions?.[0]?.competitors || [];
@@ -42,22 +32,29 @@ export default async function handler(req, res) {
       if (status === "STATUS_CUT" || status === "STATUS_WITHDRAWN" || status === "STATUS_DQ") {
         score = 9999;
       } else {
-        const raw = c.statistics?.find(s => s.name === "toPar")?.displayValue
-          || c.linescores?.slice(-1)[0]?.displayValue
+        // Try multiple places ESPN might put the score
+        const toPar = c.statistics?.find(s => s.name === "toPar")?.displayValue
+          || c.statistics?.find(s => s.abbreviation === "TOT")?.displayValue
+          || c.score?.displayValue
+          || c.linescores?.reduce((acc, l) => acc + (parseInt(l.value) || 0), 0).toString()
           || "0";
-        if (raw === "E") score = 0;
-        else if (raw === "CUT" || raw === "WD") score = 9999;
-        else score = parseInt(raw) || 0;
+
+        if (toPar === "E" || toPar === "0") score = 0;
+        else if (toPar === "CUT" || toPar === "WD") score = 9999;
+        else score = parseInt(toPar) || 0;
       }
 
-      players.push({ name, score });
+      if (name) players.push({ name, score });
     }
 
-    const cutInfo = event.competitions?.[0]?.situation?.cutLine;
-    if (cutInfo !== undefined) cutLine = parseInt(cutInfo);
-
-    res.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate");
-    res.status(200).json({ players, cutLine, round: event.status?.period || 1 });
+    res.setHeader("Cache-Control", "s-maxage=30, stale-while-revalidate");
+    res.status(200).json({
+      players,
+      cutLine,
+      round: event.status?.period || 1,
+      eventName: event.name,
+      total: players.length
+    });
 
   } catch (e) {
     res.status(500).json({ error: e.message });
