@@ -1,11 +1,25 @@
 export default async function handler(req, res) {
   try {
-    const r = await fetch(
+    // Try multiple ESPN endpoints
+    const endpoints = [
       "https://site.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard",
-      { headers: { "Accept": "application/json" } }
-    );
-    if (!r.ok) throw new Error(`ESPN returned ${r.status}`);
-    const data = await r.json();
+      "https://site.api.espn.com/apis/site/v2/sports/golf/leaderboard",
+      "https://site.web.api.espn.com/apis/site/v2/sports/golf/pga/leaderboard?region=us&lang=en",
+    ];
+
+    let data = null;
+    let lastStatus = null;
+
+    for (const url of endpoints) {
+      const r = await fetch(url, { headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0" } });
+      lastStatus = r.status;
+      if (r.ok) {
+        data = await r.json();
+        break;
+      }
+    }
+
+    if (!data) throw new Error(`ESPN returned ${lastStatus} on all endpoints`);
 
     const players = [];
     let cutLine = null;
@@ -15,7 +29,7 @@ export default async function handler(req, res) {
     ) || data.events?.[0];
 
     if (!event) {
-      return res.status(200).json({ players: [], cutLine: null, error: "No Masters event found yet" });
+      return res.status(200).json({ players: [], cutLine: null, error: "No Masters event found yet — tournament may not have started" });
     }
 
     const competitors = event.competitions?.[0]?.competitors || [];
@@ -39,7 +53,6 @@ export default async function handler(req, res) {
       players.push({ name, score });
     }
 
-    // Try to pull cut line from event details
     const cutInfo = event.competitions?.[0]?.situation?.cutLine;
     if (cutInfo !== undefined) cutLine = parseInt(cutInfo);
 
